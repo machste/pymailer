@@ -13,9 +13,9 @@ class Config(object):
         "port": 25,
         "username": "username",
         "domain": "example.com",
-        "password": "password",
+        "password": None,
         "display_name": "Test User",
-        "log_level": logging.ERROR,
+        "log_level": logging.WARN,
         "dbg_folder": "./output",
         "dry_run": False,
     }
@@ -60,7 +60,6 @@ class Config(object):
                     else:
                         _log.warn(f"Unknown config parameter: {key}!")
             f.close()
-            self._loaded = True
         except IOError as e:
             _log.warn(f"Could not open config file '{cfg_file}'!")
             self.filename = None

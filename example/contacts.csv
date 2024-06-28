@@ -1,3 +1,4 @@
-NAME,FIRSTNAME,EMAIL,NICKNAME
-Alexander,Smith,paul.smith@gmail.com,Alex
-Jane,Doe,jane.doe@gmail.com,Jane
+NAME,FIRSTNAME,EMAIL,NICKNAME,GENDER
+Alexander,Smith,alexander.smith@gmail.com,Alex,male
+Jane,Doe,jane.doe@gmail.com,Jane,female
+Samuel,Miller,sunnyboy@gmail.com,Sunny,

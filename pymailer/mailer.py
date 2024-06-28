@@ -2,6 +2,7 @@
 import logging
 import sys
 import os
+import jinja2
 import smtplib
 
 from string import Template
@@ -13,6 +14,54 @@ from pymailer.email import Email
 
 _log = logging.getLogger(__name__)
 
+cfg = Config()
+template_folder = ""
+
+def generate_email(contact, mail, subject=None):
+    # Gather variables for templates
+    template_vars = {
+        "FROM": cfg.from_mailbox,
+        "TO": contact.mailbox,
+        "SENDER": cfg.display_name,
+        **contact
+    }
+    mail_template = jinja2.Template(mail)
+    mail = mail_template.render(template_vars)
+    # Stitch mail into plain text and html
+    stitcher = Stitcher(mail, template_folder)
+    mail_plain = stitcher.stitch("plain")
+    mail_html = stitcher.stitch("html", suppress_subject=False)
+    if subject is None:
+        subject = stitcher.get_subject()
+    template_vars["SUBJECT"] = subject
+    # Create templates
+    plain_template = Template(mail_plain)
+    html_template = Template(mail_html)
+    # Generate individual e-mails
+    plain = plain_template.safe_substitute(template_vars)
+    html = html_template.safe_substitute(template_vars)
+    # Save plain and html templates (for debugging)
+    if cfg.dbg_folder is not None:
+        basename = os.path.join(cfg.dbg_folder, contact.email)
+        if not os.path.isdir(cfg.dbg_folder):
+            os.makedirs(cfg.dbg_folder)
+        with open(f"{basename}.txt", "w+") as f:
+            f.write(plain)
+        with open(f"{basename}.html", "w+") as f:
+            f.write(html)
+    try:
+        email = Email(cfg.from_mailbox, contact.mailbox, subject, plain)
+        email.set_html_content(html, os.path.join(template_folder, "html"))
+    except Email.Error as error:
+        _log.debug(error)
+        return None
+    # Save generated e-mail (for debugging)
+    if cfg.dbg_folder is not None:
+        with open(os.path.join(cfg.dbg_folder, contact.email), "w+") as f:
+            f.write(email.get_data())
+    return email
+
+
 def main():
     # Check arguments
     if len(sys.argv) != 3:
@@ -23,80 +72,59 @@ def main():
     logging.getLogger().setLevel(logging.ERROR)
     logging.info("Mail Generator")
     # Load config
-    cfg = Config()
     cfg.load("./pymailer.cfg")
     # Set log level according to config file
     logging.getLogger().setLevel(cfg.log_level)
     # Open mail file
-    with open(sys.argv[1], "r") as mail_file:
-        mail_filename = mail_file.name
-        tmpl_dir = os.path.dirname(mail_file.name)
-        mail = mail_file.read()
+    with open(sys.argv[1], "r") as f:
+        mail_fname = f.name
+        mail = f.read()
+        tmpl_dir = os.path.dirname(f.name)
+    _log.debug(f"mail: {mail_fname}, templates: {tmpl_dir}")
     # Load contacts from CSV file
     contacts = Contacts()
     contacts.load(sys.argv[2])
-    # Stitch mail into plain text and html
-    _log.debug(f"mail: {mail_filename}, templates: {tmpl_dir}")
-    stitcher = Stitcher(mail, tmpl_dir)
-    mail_plain = stitcher.stitch("plain")
-    mail_html = stitcher.stitch("html", suppress_subject=False)
-    # Save plain and html templates (for debugging)
-    if cfg.dbg_folder is not None:
-        if not os.path.isdir(cfg.dbg_folder):
-            os.makedirs(cfg.dbg_folder)
-        with open(os.path.join(cfg.dbg_folder, "template.txt"), "w+") as plain:
-            plain.write(mail_plain)
-        with open(os.path.join(cfg.dbg_folder, "template.html"), "w+") as html:
-            html.write(mail_html)
-    # Gather global variables for templates
-    email_vars = {}
-    email_vars["FROM"] = cfg.from_mailbox
-    email_vars["SUBJECT"] = stitcher.get_subject()
-    email_vars["SENDER"] = cfg.display_name
-    # Create templates
-    plain_template = Template(mail_plain)
-    html_template = Template(mail_html)
-    # Generate individual e-mails
+    # Generate e-mail for each contact
     emails = []
-    for c in contacts:
-        mapping = {**email_vars, **c}
-        subject = mapping["SUBJECT"]
-        plain = plain_template.safe_substitute(mapping)
-        html_data = html_template.safe_substitute(mapping)
-        html = Email.Html(html_data, os.path.join(tmpl_dir, "html"))
-        try:
-            email = Email(cfg.from_mailbox, c.mailbox, subject, plain, html)
-        except Email.Error as err:
-            _log.error(f"Unable to generate e-mail for '{c}'!")
-        # Save generated e-mail (for debugging)
-        if cfg.dbg_folder is not None:
-            with open(os.path.join(cfg.dbg_folder, c.email), "w+") as f:
-                f.write(email.get_data())
+    for contact in contacts:
+        email = generate_email(contact, mail)
+        if email is None:
+            _log.error(f"Unable to generate e-mail for '{contact}'!")
+            continue
         emails.append(email)
     # Connect and login to SMTP server
     try:
         smtp = smtplib.SMTP_SSL(cfg.host, cfg.port, context=cfg.ssl_context)
-    except:
+        if cfg.password is not None:
+            smtp.login(cfg.email, cfg.password)
+    except smtplib.SMTPAuthenticationError:
+        _log.error(f"Unable to login '{cfg.email}' at {cfg.host}!")
+        exit(-1)
+    except Exception as error:
+        _log.debug(error)
         _log.error(f"Unable to connect to {cfg.host}!")
         exit(-1)
-    smtp.login(cfg.email, cfg.password)
     # Send all e-mails
     for email in emails:
-        email_ok = True
+        email_ok = False
+        crit_error = None
         sys.stdout.write(f"{email.to_mailbox} -> ")
-        if cfg.dry_run:
-            sys.stdout.write("(")
-        else:
-            # Send email
-            try:
-                email.send(smtp)
-            except Exception as err:
-                _log.debug(err)
-                email_ok = False
-        sys.stdout.write("OK" if email_ok else "ERR")
-        if cfg.dry_run:
-            sys.stdout.write(")")
-        sys.stdout.write("\n")
+        # Send email
+        try:
+            if not cfg.dry_run:
+                email_ok = email.send(smtp)
+            else:
+                email_ok = True
+        except smtplib.SMTPSenderRefused as error:
+            crit_error = f"Sender '{cfg.from_mailbox}' got refused!"
+        except Exception as error:
+            _log.debug(error)
+        result = "OK" if email_ok else "ERR"
+        sys.stdout.write((f"({result})" if cfg.dry_run else result) + "\n")
+        # Stop sending emails if a critical error occured
+        if crit_error is not None:
+            _log.error(crit_error)
+            break
     smtp.close()
 
 if __name__ == "__main__":

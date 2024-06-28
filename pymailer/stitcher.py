@@ -49,7 +49,7 @@ class Stitcher(object):
         try:
             tmpl = open(tmpl_path, "r")
         except Exception as err:
-            _log.error(err)
+            _log.debug(err)
             return None
         t = Template(tmpl.read())
         tmpl.close()

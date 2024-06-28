@@ -13,14 +13,12 @@ _log = logging.getLogger(__name__)
 
 class Email(object):
 
-    def __init__(self, from_mailbox, to_mailbox, subject, text, html=None):
+    def __init__(self, from_mailbox, to_mailbox, subject, text):
         self.em= EmailMessage()
         self.em["From"] = from_mailbox
         self.em["To"] = to_mailbox
         self.em["Subject"] = subject
         self.em.set_content(text)
-        if html is not None:
-            self.set_html_content(html)
 
     @property
     def from_mailbox(self):
@@ -38,47 +36,48 @@ class Email(object):
             _log.warn("Unable to get domain for e-mail!")
             return None
 
-    def set_html_content(self, html):
+    def set_html_content(self, html, html_root="."):
         # Find all images in the HTML code
         img_finder = ImageFinder()
-        img_finder.feed(html.data)
+        img_finder.feed(html)
         # Replace external images in HTML with CID resources
-        html_lines = html.data.splitlines()
+        html_lines = html.splitlines()
         resources = []
         for img in img_finder.images:
             if img.src.startswith("data:"):
                 # Do replace inline images
                 continue
             # Get local image path, if possible
-            img_path = os.path.join(html.root_path, img.src)
+            img_path = os.path.join(html_root, img.src)
             img_path = os.path.relpath(img_path)
             # Only replace image if it exists
             if not os.path.exists(img_path):
                 continue
             # Create HTML resource
-            res = CidResource(img.alt, self.domain, img_path)
-            resources.append(res)
+            resource = CidResource(img.alt, self.domain, img_path)
+            resources.append(resource)
             line_idx = img.html_line - 1
             orig_line = html_lines[line_idx]
-            replaced_line = orig_line.replace(img.src, res.cid_src)
+            replaced_line = orig_line.replace(img.src, resource.cid_src)
             html_lines[line_idx] = replaced_line
-        html.data = "\n".join(html_lines)
+        html = "\n".join(html_lines)
         # Turn CSS blocks into style attributes
-        html.data = transform(html.data, base_path=html.root_path,
+        html = transform(html, base_path=html_root,
                 allow_loading_external_files=True,
                 cssutils_logging_level=logging.ERROR)
         # Add HTML part to email
-        self.em.add_alternative(html.data, subtype="html")
+        self.em.add_alternative(html, subtype="html")
         # Add related Resources to email
-        for i, res in enumerate(resources):
-            with open(res.path, "rb") as f:
+        for resource in resources:
+            with open(resource.path, "rb") as f:
                 maintype, subtype = mimetypes.guess_type(f.name)[0].split("/")
                 self.em.get_payload()[1].add_related(f.read(),
                         maintype=maintype, subtype=subtype,
-                        filename=res.name, cid=res.cid)
+                        filename=resource.name, cid=resource.cid)
 
     def send(self, smtp_server):
         smtp_server.send_message(self.em)
+        return True
 
     def get_data(self):
         return self.em.as_string()
