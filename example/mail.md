@@ -1,3 +1,5 @@
+[header]: <>
+
 # Welcome to Pymailer
 
 Hello {{ NICKNAME }},
@@ -25,3 +27,5 @@ Before you browse our online shop, please check the following information:
 
 Regards,  
 {{ SENDER }}
+
+[footer]: <>
